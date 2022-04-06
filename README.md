@@ -4,22 +4,22 @@ nginx-curl-quiche-build-docker
 A Dockerfile for curl-quiche and nginx-quiche using
 [cloudflare/quiche: 🥧 Savoury implementation of the QUIC transport protocol and HTTP/3](https://github.com/cloudflare/quiche).
 
-## How to build
+## How to build and run nginx-quiche and curl-quiche using docker-compose
 
 ```
-docker build -t nginx-curl-quiche .
+make
 ```
 
-## How to run
+## How to build and run nginx-quiche and curl-quiche using docker
 
-Run nginx in a Docker container.
-
-```
-docker run --rm nginx-curl-quiche
-```
-
-Run curl inside the above container.
+Build and nginx-quiche in a Docker container.
 
 ```
-docker exec -it $(docker ps -q) curl -kv --http3 https://127.0.0.1
+make run-nginx-quiche
+```
+
+In another terminal, build and run curl-quiche and send request to the nginx-quiche above.
+
+```
+make run-curl-quiche-http3
 ```

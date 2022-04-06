@@ -14,8 +14,8 @@ RUN curl -O https://nginx.org/download/nginx-1.16.1.tar.gz
 RUN tar xzvf nginx-1.16.1.tar.gz
 WORKDIR /src/nginx-1.16.1
 RUN patch -p01 < ../quiche/nginx/nginx-1.16.patch
-RUN ./configure                                 \
-       --prefix=$PWD                           \
+RUN ./configure                                \
+       --prefix=/usr                           \
        --build="quiche-$(git --git-dir=../quiche/.git rev-parse --short HEAD)" \
        --with-http_ssl_module                  \
        --with-http_v2_module                   \
@@ -23,15 +23,10 @@ RUN ./configure                                 \
        --with-openssl=../quiche/quiche/deps/boringssl \
        --with-quiche=../quiche
 RUN make
-RUN mkdir logs
+RUN make install
 
-RUN mkdir /etc/nginx
-RUN openssl req -new -newkey rsa:2048 -sha1 -x509 -nodes \
-    -set_serial 1 \
-    -days 365 \
-    -subj "/C=JP/ST=Osaka/L=Osaka City/CN=example.com" \
-    -out /etc/nginx/cert.crt \
-    -keyout /etc/nginx/cert.key
-COPY nginx.conf /etc/nginx/
+RUN mkdir -p /etc/nginx /var/log/nginx
+RUN ln -s /dev/stdout /var/log/nginx/access.log
+RUN ln -s /dev/stderr /var/log/nginx/error.log
 
-CMD ["/src/nginx-1.16.1/objs/nginx", "-c", "/etc/nginx/nginx.conf", "-g", "daemon off;"]
+CMD ["/usr/sbin/nginx", "-c", "/etc/nginx/nginx.conf", "-g", "daemon off;"]
