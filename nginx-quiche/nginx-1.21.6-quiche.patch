@@ -1,74 +1,3 @@
-From 3a9b271f11cae809fc422b1720b3100ed8c5088b Mon Sep 17 00:00:00 2001
-From: Hiroaki Nakamura <hnakamur@gmail.com>
-Date: Thu, 7 Apr 2022 20:20:15 +0900
-Subject: [PATCH] Initial QUIC and HTTP/3 implementation using quiche
-
----
- auto/lib/conf                               |    4 +
- auto/lib/make                               |    4 +
- auto/lib/openssl/make                       |   12 +-
- auto/lib/quiche/conf                        |   23 +
- auto/lib/quiche/make                        |   23 +
- auto/make                                   |    3 +-
- auto/modules                                |   44 +
- auto/modules.orig                           | 1425 ++++
- auto/options                                |    9 +
- auto/options.orig                           |  635 ++
- src/core/ngx_connection.h                   |    7 +
- src/core/ngx_connection.h.orig              |  228 +
- src/core/ngx_core.h                         |    3 +
- src/core/ngx_core.h.orig                    |  113 +
- src/event/ngx_event_quic.c                  |  620 ++
- src/event/ngx_event_quic.h                  |   49 +
- src/event/ngx_event_udp.c                   |    8 +
- src/http/modules/ngx_http_ssl_module.c      |   13 +-
- src/http/modules/ngx_http_ssl_module.c.orig | 1336 ++++
- src/http/ngx_http.c                         |   33 +-
- src/http/ngx_http.c.orig                    | 2111 ++++++
- src/http/ngx_http.h                         |    4 +
- src/http/ngx_http_core_module.c             |    7 +
- src/http/ngx_http_core_module.c.orig        | 5181 +++++++++++++++
- src/http/ngx_http_core_module.h             |    3 +
- src/http/ngx_http_request.c                 |  140 +-
- src/http/ngx_http_request.c.orig            | 3894 +++++++++++
- src/http/ngx_http_request.c.rej             |   11 +
- src/http/ngx_http_request.h                 |    3 +
- src/http/ngx_http_request.h.orig            |  619 ++
- src/http/ngx_http_request_body.c            |   33 +
- src/http/ngx_http_request_body.c.orig       | 1357 ++++
- src/http/ngx_http_upstream.c                |   13 +
- src/http/ngx_http_upstream.c.orig           | 6624 +++++++++++++++++++
- src/http/v3/ngx_http_v3.c                   | 2231 +++++++
- src/http/v3/ngx_http_v3.h                   |   79 +
- src/http/v3/ngx_http_v3_filter_module.c     |   68 +
- src/http/v3/ngx_http_v3_module.c            |  286 +
- src/http/v3/ngx_http_v3_module.h            |   34 +
- src/os/unix/ngx_udp_sendmsg_chain.c         |    1 +
- src/os/unix/ngx_udp_sendmsg_chain.c.orig    |  342 +
- 41 files changed, 27622 insertions(+), 11 deletions(-)
- create mode 100644 auto/lib/quiche/conf
- create mode 100644 auto/lib/quiche/make
- create mode 100644 auto/modules.orig
- create mode 100644 auto/options.orig
- create mode 100644 src/core/ngx_connection.h.orig
- create mode 100644 src/core/ngx_core.h.orig
- create mode 100644 src/event/ngx_event_quic.c
- create mode 100644 src/event/ngx_event_quic.h
- create mode 100644 src/http/modules/ngx_http_ssl_module.c.orig
- create mode 100644 src/http/ngx_http.c.orig
- create mode 100644 src/http/ngx_http_core_module.c.orig
- create mode 100644 src/http/ngx_http_request.c.orig
- create mode 100644 src/http/ngx_http_request.c.rej
- create mode 100644 src/http/ngx_http_request.h.orig
- create mode 100644 src/http/ngx_http_request_body.c.orig
- create mode 100644 src/http/ngx_http_upstream.c.orig
- create mode 100644 src/http/v3/ngx_http_v3.c
- create mode 100644 src/http/v3/ngx_http_v3.h
- create mode 100644 src/http/v3/ngx_http_v3_filter_module.c
- create mode 100644 src/http/v3/ngx_http_v3_module.c
- create mode 100644 src/http/v3/ngx_http_v3_module.h
- create mode 100644 src/os/unix/ngx_udp_sendmsg_chain.c.orig
-
 diff --git a/auto/lib/conf b/auto/lib/conf
 index 2c7af104..abf920ba 100644
 --- a/auto/lib/conf
@@ -12352,7 +12281,7 @@ index 004a98ee..a333ac14 100644
  
  
 diff --git a/src/http/ngx_http_request.c b/src/http/ngx_http_request.c
-index 013b7158..c90704a8 100644
+index 013b7158..9029fa5a 100644
 --- a/src/http/ngx_http_request.c
 +++ b/src/http/ngx_http_request.c
 @@ -64,6 +64,10 @@ static void ngx_http_ssl_handshake(ngx_event_t *rev);
@@ -12366,7 +12295,7 @@ index 013b7158..c90704a8 100644
  
  static char *ngx_http_client_errors[] = {
  
-@@ -350,6 +354,19 @@ ngx_http_init_connection(ngx_connection_t *c)
+@@ -350,6 +354,21 @@ ngx_http_init_connection(ngx_connection_t *c)
          c->log->action = "reading PROXY protocol";
      }
  
@@ -12377,7 +12306,9 @@ index 013b7158..c90704a8 100644
 +
 +        /* We already have a UDP packet in the connection buffer, so we don't
 +         * need to wait for another read event to kick-off the handshake. */
-+        ngx_add_timer(rev, c->listening->post_accept_timeout);
++        cscf = ngx_http_get_module_srv_conf(hc->conf_ctx,
++                                            ngx_http_core_module);
++        ngx_add_timer(rev, cscf->client_header_timeout);
 +        ngx_http_quic_handshake(rev);
 +        return;
 +    }
@@ -12386,7 +12317,7 @@ index 013b7158..c90704a8 100644
      if (rev->ready) {
          /* the deferred accept(), iocp */
  
-@@ -805,7 +822,7 @@ ngx_http_ssl_handshake_handler(ngx_connection_t *c)
+@@ -805,7 +824,7 @@ ngx_http_ssl_handshake_handler(ngx_connection_t *c)
  
          c->ssl->no_wait_shutdown = 1;
  
@@ -12395,7 +12326,7 @@ index 013b7158..c90704a8 100644
       && defined TLSEXT_TYPE_application_layer_protocol_negotiation)
          {
          unsigned int            len;
-@@ -814,15 +831,33 @@ ngx_http_ssl_handshake_handler(ngx_connection_t *c)
+@@ -814,15 +833,33 @@ ngx_http_ssl_handshake_handler(ngx_connection_t *c)
  
          hc = c->data;
  
@@ -12430,7 +12361,7 @@ index 013b7158..c90704a8 100644
          }
  #endif
  
-@@ -1047,6 +1082,68 @@ failed:
+@@ -1047,6 +1084,71 @@ failed:
  
  #endif
  
@@ -12444,6 +12375,7 @@ index 013b7158..c90704a8 100644
 +    ngx_http_connection_t     *hc;
 +    ngx_http_v3_srv_conf_t    *qscf;
 +    ngx_http_ssl_srv_conf_t   *sscf;
++    ngx_http_core_srv_conf_t  *cscf;
 +
 +    c = rev->data;
 +    hc = c->data;
@@ -12484,7 +12416,9 @@ index 013b7158..c90704a8 100644
 +    if (rc == NGX_AGAIN) {
 +
 +        if (!rev->timer_set) {
-+            ngx_add_timer(rev, c->listening->post_accept_timeout);
++            cscf = ngx_http_get_module_srv_conf(hc->conf_ctx,
++                                                ngx_http_core_module);
++            ngx_add_timer(rev, cscf->client_header_timeout);
 +        }
 +
 +        c->ssl->handler = ngx_http_ssl_handshake_handler;
@@ -12499,7 +12433,7 @@ index 013b7158..c90704a8 100644
  
  static void
  ngx_http_process_request_line(ngx_event_t *rev)
-@@ -2736,6 +2833,13 @@ ngx_http_finalize_connection(ngx_http_request_t *r)
+@@ -2736,6 +2838,13 @@ ngx_http_finalize_connection(ngx_http_request_t *r)
      }
  #endif
  
@@ -12513,7 +12447,7 @@ index 013b7158..c90704a8 100644
      clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
  
      if (r->main->count != 1) {
-@@ -2950,6 +3054,19 @@ ngx_http_test_reading(ngx_http_request_t *r)
+@@ -2950,6 +3059,19 @@ ngx_http_test_reading(ngx_http_request_t *r)
  
  #endif
  
@@ -12533,7 +12467,7 @@ index 013b7158..c90704a8 100644
  #if (NGX_HAVE_KQUEUE)
  
      if (ngx_event_flags & NGX_USE_KQUEUE_EVENT) {
-@@ -3642,7 +3759,15 @@ ngx_http_close_request(ngx_http_request_t *r, ngx_int_t rc)
+@@ -3642,7 +3764,15 @@ ngx_http_close_request(ngx_http_request_t *r, ngx_int_t rc)
      }
  #endif
  
@@ -12549,7 +12483,7 @@ index 013b7158..c90704a8 100644
      ngx_http_close_connection(c);
  }
  
-@@ -3763,6 +3888,17 @@ ngx_http_close_connection(ngx_connection_t *c)
+@@ -3763,6 +3893,17 @@ ngx_http_close_connection(ngx_connection_t *c)
      ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                     "close http connection: %d", c->fd);
  
@@ -28321,6 +28255,3 @@ index 00000000..3d1d6dde
 +
 +    return n;
 +}
--- 
-2.25.1
-
